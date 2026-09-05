@@ -1,1 +1,2 @@
 C:\Users\pi\Desktop\FN_diffGuesser\x64\Debug\lua.dll
+C:\Users\pi\Desktop\FN_diffGuesser\FN_diffGuesser\x64\Debug\FN_diffG.0853463E.Up2Date

@@ -11,8 +11,15 @@ struct NoteStat {
     double hitX;
     double hitVX;
     double hitVY;
-    double speedMetric;
+    double speedMetric; // 後で計算する
     bool big;
+};
+
+// Accelの変化を記録する構造体
+struct AccelEvent {
+    double time;
+    int type; // 0: Accel(開始), 1: AccelEnd(終了)
+    double val;
 };
 
 int main() {
@@ -22,22 +29,33 @@ int main() {
     lua["package"]["loaded"]["fn-commands"] = true;
 
     std::vector<NoteStat> notes;
+    std::vector<AccelEvent> accelEvents;
+
     double currentTime = 0.0;
     double currentBPM = 120.0;
-    double currentAccel = 1.0;
+
+    // 初期状態のAccelは1.0とする
+    accelEvents.push_back({ 0.0, 0, 1.0 });
 
     lua.set_function("BPM", [&](double bpm) { currentBPM = bpm; });
-    lua.set_function("Accel", [&](double a) { currentAccel = a; });
-    lua.set_function("AccelEnd", [&](double a) { currentAccel = a; });
+
+    // 時間と値を履歴として保存するだけに変更
+    lua.set_function("Accel", [&](double a) {
+        accelEvents.push_back({ currentTime, 0, a });
+        });
+    lua.set_function("AccelEnd", [&](double a) {
+        accelEvents.push_back({ currentTime, 1, a });
+        });
+
     lua.set_function("Beat", [](sol::table, sol::optional<double>, sol::optional<double>) {});
 
     lua.set_function("Step", [&](double num, double denom) {
         currentTime += (num / denom) * 240.0 / currentBPM;
         });
 
+    // 読み込み時はspeedMetricを仮の0.0にしておく
     lua.set_function("Note", [&](double hitX, double hitVX, double hitVY, bool big, sol::optional<bool> fall) {
-        double speed = currentAccel * std::sqrt(hitVX * hitVX + hitVY * hitVY);
-        notes.push_back({ currentTime, hitX, hitVX, hitVY, speed, big });
+        notes.push_back({ currentTime, hitX, hitVX, hitVY, 0.0, big });
         });
 
     lua.set_function("fnChart", [&](sol::table chartData) {
@@ -66,6 +84,49 @@ int main() {
         std::cout << "ノートが存在しない．\n";
         return 0;
     }
+
+    // --- ここからパス2：各音符の時間のAccelを計算してspeedMetricを確定させる ---
+    auto getAccelAt = [&](double t) {
+        if (accelEvents.empty()) return 1.0;
+
+        int lastIdx = -1;
+        for (int i = 0; i < (int)accelEvents.size(); ++i) {
+            if (accelEvents[i].time <= t) {
+                lastIdx = i;
+            }
+            else {
+                break; // 時間順に並んでいる前提
+            }
+        }
+
+        if (lastIdx == -1) return accelEvents[0].val;
+
+        const auto& lastEv = accelEvents[lastIdx];
+
+        // 最後のイベントがAccelEndなら，そのまま一定
+        if (lastEv.type == 1) return lastEv.val;
+
+        // 最後のイベントがAccelなら，次に来るAccelEndとの間で線形補間する
+        if (lastEv.type == 0) {
+            if (lastIdx + 1 < (int)accelEvents.size()) {
+                const auto& nextEv = accelEvents[lastIdx + 1];
+                if (nextEv.type == 1 && nextEv.time > lastEv.time) {
+                    double ratio = (t - lastEv.time) / (nextEv.time - lastEv.time);
+                    if (ratio < 0.0) ratio = 0.0;
+                    if (ratio > 1.0) ratio = 1.0;
+                    return lastEv.val + (nextEv.val - lastEv.val) * ratio;
+                }
+            }
+            return lastEv.val;
+        }
+        return 1.0;
+        };
+
+    for (auto& n : notes) {
+        double currentAccel = getAccelAt(n.time);
+        n.speedMetric = currentAccel * std::sqrt(n.hitVX * n.hitVX + n.hitVY * n.hitVY);
+    }
+    // ---------------------------------------------------------------------
 
     double duration = notes.back().time - notes.front().time;
     double density = (duration > 0.0) ? (notes.size() / duration) : 0.0;
@@ -205,38 +266,33 @@ int main() {
     }
     double bigTrueRatio = (count > 0) ? (static_cast<double>(bigTrueCount) / count) : 0.0;
 
-    // --- パラメータ計算 (キャップ前後の値を保持) ---
-    double penalty = std::min(1.0, 0.0005 * duration * duration + 0.5);
+    // --- パラメータ計算 ---
     double bigNps = duration > 0.0 ? (count + bigTrueCount) / duration : 0.0;
 
     double rawNotesBase = std::round((std::log(std::max(1.0, bigNps)) / std::log(5.0)) * 100.0);
-    double valNotes = std::round(std::min(200.0, rawNotesBase) * penalty);
-    double rawNotes = std::round(rawNotesBase * penalty);
+    double valNotes = std::round(std::min(200.0, rawNotesBase));
+    double rawNotes = std::round(rawNotesBase);
 
     double rawPeakBase = std::round(maxDensity1s * maxDensity5s * 0.7);
-    double valPeak = std::round(std::min(200.0, rawPeakBase) * penalty);
-    double rawPeak = std::round(rawPeakBase * penalty);
+    double valPeak = std::round(std::min(200.0, rawPeakBase));
+    double rawPeak = std::round(rawPeakBase);
 
     double rawBigBase = std::round(std::min(50.0, count * bigTrueCount / 800.0) + (bigAdjacentCount01 * bigAdjacentCount01) / 3000.0 + bigAdjacentCount02 / 10.0);
-    double valBig = std::round(std::min(200.0, rawBigBase) * penalty);
-    double rawBig = std::round(rawBigBase * penalty);
+    double valBig = std::round(std::min(200.0, rawBigBase));
+    double rawBig = std::round(rawBigBase);
 
-    double rawScrollBase = std::round(modeSpeedMetric / 5.0);
-    double valScroll = std::round(std::min(200.0, rawScrollBase) * penalty);
-    double rawScroll = std::round(rawScrollBase * penalty);
+    double rawScrollBase = std::pow(modeSpeedMetric, 4.0) / 8000000000.0;
+    double valScroll = std::round(std::min(200.0, rawScrollBase));
+    double rawScroll = std::round(rawScrollBase);
 
-    double rawSpreadBase = (hitXDiffVar * 10.0) * (hitVXVar * 10.0);
-    double valSpread = std::round(std::min(200.0, rawSpreadBase) * penalty);
-    double rawSpread = std::round(rawSpreadBase * penalty);
+    double rawSpreadCalc = (hitXDiffVar * 10.0) * (hitVXVar * 10.0);
+    double rawSpreadBase = 30.0 * std::log(rawSpreadCalc + 1.0);
+    double valSpread = std::round(std::min(200.0, rawSpreadBase));
+    double rawSpread = std::round(rawSpreadBase);
 
-    double rawChordBase = 0.0;
-    double valChord = 0.0;
-    double rawChord = 0.0;
-    if (simultaneousScore > 0) {
-        rawChordBase = std::max(std::round(simultaneousScore / 3.0), std::round(30.0 * std::log(simultaneousScore)));
-        valChord = std::round(std::min(200.0, rawChordBase) * penalty);
-        rawChord = std::round(rawChordBase * penalty);
-    }
+    double rawChordBase = simultaneousScore * 0.3;
+    double valChord = std::round(std::min(200.0, rawChordBase));
+    double rawChord = std::round(rawChordBase);
 
     double params[6] = { valNotes, valPeak, valBig, valScroll, valSpread, valChord };
     double maxParam = params[0];
@@ -280,7 +336,6 @@ int main() {
     std::cout << "  Big隣接ペア数: [0.1秒以内] " << bigAdjacentCount01 << " / [0.2秒以内] " << bigAdjacentCount02 << "\n\n";
 
     std::cout << "評価パラメータ\n";
-    std::cout << "PENALTY: " << penalty << "\n";
     std::cout << "NOTES: " << valNotes << "(" << rawNotes << ")\n";
     std::cout << "PEAK: " << valPeak << "(" << rawPeak << ")\n";
     std::cout << "BIG: " << valBig << "(" << rawBig << ")\n";
