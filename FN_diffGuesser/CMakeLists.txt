@@ -1,6 +1,6 @@
 # CMake 3.11以降が必要
 cmake_minimum_required(VERSION 3.11)
-project(ChartAnalyzer)
+project(ChartAnalyzer CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -13,7 +13,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(json)
 
 # 2. 実行ファイルの定義（ファイル名は実際の環境に合わせること）
-add_executable(analyzer main.cpp)
+add_executable(analyzer FN_diffGuesser.cpp)
 
 # 3. 実行ファイルにダウンロードしたjsonライブラリをリンクさせる
 target_link_libraries(analyzer PRIVATE nlohmann_json::nlohmann_json)
