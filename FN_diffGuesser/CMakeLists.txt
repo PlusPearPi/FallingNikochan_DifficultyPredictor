@@ -1,12 +1,21 @@
-cmake_minimum_required(VERSION 3.10)
+# CMake 3.11以降が必要
+cmake_minimum_required(VERSION 3.11)
 project(ChartAnalyzer)
 
 set(CMAKE_CXX_STANDARD 17)
 
-find_package(Lua REQUIRED)
+# 1. FetchContentを使ってnlohmann/jsonを自動ダウンロード
+include(FetchContent)
+FetchContent_Declare(
+    json
+    URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+)
+FetchContent_MakeAvailable(json)
 
-add_executable(analyzer FN_diffGuesser.cpp)
-target_include_directories(analyzer PRIVATE ${LUA_INCLUDE_DIR})
-# Sol2を同梱している場合はそのパスも追加する
-# target_include_directories(analyzer PRIVATE ${CMAKE_SOURCE_DIR}/sol)
-target_link_libraries(analyzer PRIVATE ${LUA_LIBRARIES})
+# 2. 実行ファイルの定義（ファイル名は実際の環境に合わせること）
+add_executable(analyzer main.cpp)
+
+# 3. 実行ファイルにダウンロードしたjsonライブラリをリンクさせる
+target_link_libraries(analyzer PRIVATE nlohmann_json::nlohmann_json)
+# ネットワーク通信用のwininetも必要に応じてリンクする
+target_link_libraries(analyzer PRIVATE wininet)
